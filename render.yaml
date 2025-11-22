@@ -1,0 +1,18 @@
+services:
+  - type: web
+    name: whatsapp-sender-service
+    env: node
+    buildCommand: npm install
+    startCommand: npm start
+    envVars:
+      - key: WHATSAPP_CORS_ORIGIN
+        value: https://marketing.aispectraa.com
+      - key: WHATSAPP_API_KEY
+        generateValue: true
+      - key: WHATSAPP_MESSAGE_LIMIT
+        value: 1000
+      - key: WHATSAPP_CONCURRENT_MESSAGES
+        value: 3
+      - key: WHATSAPP_MESSAGE_DELAY
+        value: 500
+

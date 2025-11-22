@@ -1,0 +1,19 @@
+{
+  "name": "whatsapp-sender-service",
+  "version": "1.0.0",
+  "description": "WhatsApp Web.js service for sending messages",
+  "main": "service.cjs",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node service.cjs"
+  },
+  "dependencies": {
+    "whatsapp-web.js": "^1.34.2",
+    "puppeteer": "^24.31.0",
+    "qrcode": "^1.5.4"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
+

@@ -1,0 +1,7 @@
+node_modules/
+sessions/
+*.log
+message_counters.json
+.env
+.DS_Store
+
