@@ -14,9 +14,9 @@ try {
 }
 
 // Configuration
-// Render.com provides PORT environment variable, fallback to WHATSAPP_PORT or 3003
+// Railway uses PORT, local uses WHATSAPP_PORT
 const PORT = process.env.PORT || process.env.WHATSAPP_PORT || 3003;
-const CORS_ORIGIN = process.env.WHATSAPP_CORS_ORIGIN || 'https://marketing.aispectraa.com';
+const CORS_ORIGIN = process.env.WHATSAPP_CORS_ORIGIN || 'http://127.0.0.1:8000';
 const API_KEY = process.env.WHATSAPP_API_KEY || 'your-secret-api-key';
 const MESSAGE_LIMIT = parseInt(process.env.WHATSAPP_MESSAGE_LIMIT || '1000');
 const CONCURRENT_MESSAGES = parseInt(process.env.WHATSAPP_CONCURRENT_MESSAGES || '3');
@@ -155,22 +155,35 @@ function initializeClient(userId) {
             sessionStatus: 'initializing',
             qrCodeData: null,
             connectedNumber: null,
+            initStartTime: Date.now(), // Track initialization start time
         });
     }
     
     const session = userSessions.get(userId);
     session.client = client;
     session.sessionStatus = 'initializing'; // Mark as initializing
+    session.initStartTime = Date.now(); // Reset init timer
+    
+    console.log(`Starting client initialization for user ${userId}, session path: ${sessionPath}`);
+    
+    // Loading screen event (fires before QR code)
+    client.on('loading_screen', (percent, message) => {
+        console.log(`Loading screen for user ${userId}: ${percent}% - ${message}`);
+        session.sessionStatus = 'initializing';
+    });
     
     // QR Code event
     client.on('qr', async (qr) => {
         try {
+            console.log(`QR code event received for user ${userId}, generating QR code image...`);
             const qrCodeData = await qrcode.toDataURL(qr);
             session.qrCodeData = qrCodeData;
             session.sessionStatus = 'qr_ready';
-            console.log(`QR code generated for user ${userId}`);
+            session.initStartTime = null; // Reset init timer
+            console.log(`QR code generated successfully for user ${userId}`);
         } catch (error) {
-            console.error('Error generating QR code:', error);
+            console.error(`Error generating QR code for user ${userId}:`, error);
+            session.sessionStatus = 'error';
         }
     });
     
@@ -181,6 +194,7 @@ function initializeClient(userId) {
             session.sessionStatus = 'connected';
             session.connectedNumber = info.wid.user;
             session.qrCodeData = null;
+            session.initStartTime = null; // Reset init timer
             // Reset re-initialization attempt counter on successful connection
             reinitAttempts.delete(String(userId));
             console.log(`WhatsApp client ready for user ${userId}, number: ${session.connectedNumber}`);
@@ -194,6 +208,7 @@ function initializeClient(userId) {
         console.error(`Authentication failure for user ${userId}:`, msg);
         session.sessionStatus = 'disconnected';
         session.qrCodeData = null;
+        session.initStartTime = null;
     });
     
     // Disconnected
@@ -202,35 +217,74 @@ function initializeClient(userId) {
         session.sessionStatus = 'disconnected';
         session.qrCodeData = null;
         session.connectedNumber = null;
+        session.initStartTime = null;
     });
     
-    // Initialize client
-    client.initialize().catch(error => {
-        console.error(`Error initializing client for user ${userId}:`, error);
-        console.error(`Error details:`, {
-            message: error.message,
-            stack: error.stack,
-            sessionPath: sessionPath,
-        });
-        session.sessionStatus = 'error';
-        
-        // Log common error causes with more detail
-        if (error.message && (error.message.includes('Chromium') || error.message.includes('puppeteer') || error.message.includes('browser'))) {
-            console.error('Chromium/Puppeteer error detected. This may be due to:');
-            console.error('1. Missing dependencies (libnss3, libatk-bridge2.0, libxss1, libgconf-2-4, etc.)');
-            console.error('2. Insufficient memory/resources on server');
-            console.error('3. Permission issues with /tmp directory or session files');
-            console.error('4. Node.js version incompatibility');
-            console.error('5. Server restrictions (shared hosting limitations)');
-            console.error(`Session path: ${sessionPath}`);
-        } else if (error.message && error.message.includes('ENOENT')) {
-            console.error('File not found error. Session directory may not exist or be inaccessible.');
-            console.error(`Session path: ${sessionPath}`);
-        } else if (error.message && error.message.includes('EACCES') || error.message.includes('permission')) {
-            console.error('Permission denied error. Check file permissions for session directory.');
-            console.error(`Session path: ${sessionPath}`);
+    // Error event
+    client.on('error', (error) => {
+        console.error(`Client error for user ${userId}:`, error);
+        if (session.sessionStatus === 'initializing') {
+            session.sessionStatus = 'error';
+            session.initStartTime = null;
         }
     });
+    
+    // Set initialization timeout (60 seconds)
+    const initTimeout = setTimeout(() => {
+        if (session.sessionStatus === 'initializing') {
+            console.error(`Initialization timeout for user ${userId} - taking too long (60s)`);
+            console.error(`Session path: ${sessionPath}`);
+            console.error(`Puppeteer config:`, JSON.stringify(puppeteerConfig, null, 2));
+            session.sessionStatus = 'error';
+            try {
+                if (client) {
+                    client.destroy().catch(e => {
+                        console.log(`Error destroying client on timeout: ${e.message}`);
+                    });
+                }
+            } catch (e) {
+                console.log(`Error destroying client on timeout: ${e.message}`);
+            }
+        }
+    }, 60000); // 60 second timeout
+    
+    console.log(`Calling client.initialize() for user ${userId}...`);
+    console.log(`Puppeteer available: ${!!puppeteer}`);
+    console.log(`Session path: ${sessionPath}`);
+    
+    // Initialize client
+    client.initialize()
+        .then(() => {
+            clearTimeout(initTimeout);
+            console.log(`Client initialization promise resolved for user ${userId} - waiting for QR or ready event...`);
+        })
+        .catch(error => {
+            clearTimeout(initTimeout);
+            console.error(`Error initializing client for user ${userId}:`, error);
+            console.error(`Error details:`, {
+                message: error.message,
+                stack: error.stack,
+                sessionPath: sessionPath,
+            });
+            session.sessionStatus = 'error';
+            
+            // Log common error causes with more detail
+            if (error.message && (error.message.includes('Chromium') || error.message.includes('puppeteer') || error.message.includes('browser'))) {
+                console.error('Chromium/Puppeteer error detected. This may be due to:');
+                console.error('1. Missing dependencies (libnss3, libatk-bridge2.0, libxss1, libgconf-2-4, etc.)');
+                console.error('2. Insufficient memory/resources on server');
+                console.error('3. Permission issues with /tmp directory or session files');
+                console.error('4. Node.js version incompatibility');
+                console.error('5. Server restrictions (shared hosting limitations)');
+                console.error(`Session path: ${sessionPath}`);
+            } else if (error.message && error.message.includes('ENOENT')) {
+                console.error('File not found error. Session directory may not exist or be inaccessible.');
+                console.error(`Session path: ${sessionPath}`);
+            } else if (error.message && (error.message.includes('EACCES') || error.message.includes('permission'))) {
+                console.error('Permission denied error. Check file permissions for session directory.');
+                console.error(`Session path: ${sessionPath}`);
+            }
+        });
     
     return client;
 }
@@ -347,10 +401,30 @@ function getSessionStatus(userId) {
             message: 'Please scan the QR code with your WhatsApp mobile app',
         };
     } else if (session.sessionStatus === 'initializing') {
+        // Check if initialization has been stuck for too long
+        const initStartTime = session.initStartTime || Date.now();
+        if (!session.initStartTime) {
+            session.initStartTime = Date.now();
+        }
+        
+        const timeSinceInit = Date.now() - initStartTime;
+        const timeoutMs = 60000; // 60 seconds
+        
+        if (timeSinceInit > timeoutMs) {
+            console.error(`Session initialization stuck for ${Math.floor(timeSinceInit / 1000)}s for user ${userIdStr}`);
+            session.sessionStatus = 'error';
+            session.initStartTime = null;
+            return {
+                type: 0,
+                status: 'error',
+                message: 'Session initialization timed out. Please click "Reset Session" and try again. If the problem persists, check server logs or restart the WhatsApp service.',
+            };
+        }
+        
         return {
             type: 0,
             status: 'initializing',
-            message: 'Session is initializing... Please wait.',
+            message: `Session is initializing... Please wait. (${Math.floor(timeSinceInit / 1000)}s)`,
         };
     } else if (session.sessionStatus === 'disconnected' || !session.client) {
         // Only re-initialize if not already initializing
@@ -454,10 +528,38 @@ async function sendBulkMessages(recipients, userId) {
         }
         console.log(`Client verified ready for user ${userIdStr}, number: ${info.wid.user}`);
     } catch (error) {
-        console.error(`Client not ready for user ${userIdStr}:`, error.message);
+        const errorMessage = error.message || 'Unknown error';
+        const errorStr = String(errorMessage).toLowerCase();
+        
+        // Check for protocol/session errors
+        const isProtocolError = errorStr.includes('protocol error') ||
+                               errorStr.includes('runtime.callfunctionon') ||
+                               errorStr.includes('session closed') ||
+                               errorStr.includes('target closed') ||
+                               errorStr.includes('browser has been closed');
+        
+        console.error(`Client not ready for user ${userIdStr}:`, errorMessage);
+        
         // If client info check fails, the client might be disconnected
         session.sessionStatus = 'disconnected';
-        throw new Error('WhatsApp client is not ready. Please refresh the page, scan QR code again, and wait for "Connected" status.');
+        session.connectedNumber = null;
+        
+        // Clean up client if protocol error
+        if (isProtocolError && session.client) {
+            try {
+                session.client.destroy().catch(e => {
+                    console.log(`Error destroying client after protocol error: ${e.message}`);
+                });
+            } catch (e) {
+                console.log(`Error destroying client after protocol error: ${e.message}`);
+            }
+        }
+        
+        const userMessage = isProtocolError
+            ? 'WhatsApp session was closed unexpectedly. Please refresh the page, scan QR code again, and wait for "Connected" status.'
+            : 'WhatsApp client is not ready. Please refresh the page, scan QR code again, and wait for "Connected" status.';
+        
+        throw new Error(userMessage);
     }
     
     const counter = getCounter(userIdStr);
@@ -636,12 +738,16 @@ async function sendBulkMessages(recipients, userId) {
                                 // For videos, if sending as video fails, try as document
                                 if (recipient.attachment.type === 'video' && !sendOptions.sendMediaAsDocument) {
                                     const errorMsg = sendError.message || '';
-                                    const isPuppeteerError = errorMsg.includes('Evaluation failed') || 
-                                                           errorMsg.includes('Session closed') ||
-                                                           errorMsg.includes('Protocol error');
+                                    const errorMsgLower = errorMsg.toLowerCase();
+                                    const isPuppeteerError = errorMsgLower.includes('evaluation failed') || 
+                                                           errorMsgLower.includes('session closed') ||
+                                                           errorMsgLower.includes('protocol error') ||
+                                                           errorMsgLower.includes('runtime.callfunctionon') ||
+                                                           errorMsgLower.includes('target closed') ||
+                                                           errorMsgLower.includes('browser has been closed');
                                     
                                     if (isPuppeteerError) {
-                                        console.log(`Puppeteer error detected (${errorMsg}), retrying as document...`);
+                                        console.log(`Puppeteer/Protocol error detected (${errorMsg}), retrying as document...`);
                                     } else {
                                         console.log(`Video sending failed (${errorMsg}), retrying as document...`);
                                     }
@@ -688,10 +794,45 @@ async function sendBulkMessages(recipients, userId) {
                         error: null,
                     };
                 } catch (error) {
+                    const errorMessage = error.message || 'Unknown error';
+                    const errorStr = String(errorMessage).toLowerCase();
+                    
+                    // Check for protocol/session errors that indicate browser closed
+                    const isProtocolError = errorStr.includes('protocol error') ||
+                                           errorStr.includes('runtime.callfunctionon') ||
+                                           errorStr.includes('session closed') ||
+                                           errorStr.includes('target closed') ||
+                                           errorStr.includes('browser has been closed') ||
+                                           errorStr.includes('connection closed');
+                    
+                    if (isProtocolError) {
+                        console.error(`Protocol/Session error detected for user ${userIdStr}:`, errorMessage);
+                        // Mark session as disconnected so it can be re-initialized
+                        if (session) {
+                            session.sessionStatus = 'disconnected';
+                            session.connectedNumber = null;
+                            // Try to clean up client
+                            if (session.client) {
+                                try {
+                                    session.client.destroy().catch(e => {
+                                        console.log(`Error destroying client after protocol error: ${e.message}`);
+                                    });
+                                } catch (e) {
+                                    console.log(`Error destroying client after protocol error: ${e.message}`);
+                                }
+                            }
+                        }
+                        return {
+                            id: recipient.id,
+                            success: false,
+                            error: 'WhatsApp session was closed. Please refresh the page, scan QR code again, and wait for "Connected" status before sending messages.',
+                        };
+                    }
+                    
                     return {
                         id: recipient.id,
                         success: false,
-                        error: error.message || 'Unknown error',
+                        error: errorMessage,
                     };
                 }
             })

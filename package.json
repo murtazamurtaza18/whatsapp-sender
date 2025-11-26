@@ -5,7 +5,9 @@
   "main": "service.cjs",
   "type": "commonjs",
   "scripts": {
-    "start": "node service.cjs"
+    "start": "node service.cjs",
+    "build": "echo 'No build step required - this is a Node.js service that runs directly' && node --version && npm list --depth=0",
+    "dev": "node service.cjs"
   },
   "dependencies": {
     "whatsapp-web.js": "^1.34.2",
